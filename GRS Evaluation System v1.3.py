@@ -86,6 +86,8 @@ odbc_params = (
     f"DATABASE={DB_CONFIG['database']};"
     f"UID={DB_CONFIG['username']};"
     f"PWD={DB_CONFIG['password']};"
+    "Encrypt=yes;"
+    "TrustServerCertificate=yes;"
 )
 odbc_connect_str = urllib.parse.quote_plus(odbc_params)
 
@@ -105,7 +107,7 @@ yesterday = (datetime.today() - timedelta(days=1)).date()
 login_id= os.getlogin().lower().strip()
 # admin_users = [i.lower().strip() for i in ["Aaltoum", "MIbrahim.c", "aalhares.c", "LMohammed.c",  "AMagboul.c", "telwahab.c", "nalsuhaimi.c"]]
 excluded_supervisors = ['Mohammed AlDaly','Ahmad ElFadil','Mohammed Fadil','Musab Hassan','Mohammed Ibrahim Mohammed', 'Mazin MohammedKhir']
-sup_ids = ['MMohammed.c', 'MBarakat.c', 'AElFadil.c', 'MFadil.c', 'falmarshed.c', 'ralotaibi.c', 'mmohammedKhir.c', 'malnmar.c', 'RAlharthi.c', 'SAlfuraihi.c', 'obakri.c', 'fhaddadi.c']
+# sup_ids = ['MMohammed.c', 'MBarakat.c', 'AElFadil.c', 'MFadil.c', 'falmarshed.c', 'ralotaibi.c', 'mmohammedKhir.c', 'malnmar.c', 'RAlharthi.c', 'SAlfuraihi.c', 'obakri.c', 'fhaddadi.c']
 # login_id = sup_ids[6].lower().strip()
 # login_id = admin_users[6].lower().strip()
 # login_id =  "SAlfuraihi.c".lower().strip()
@@ -909,8 +911,7 @@ class MainWindow(QtWidgets.QWidget):
             editors = pd.read_sql("""SELECT * FROM evaluation."EditorsList" 
                         WHERE "GroupID" IN ('Editor Morning Shift', 'Editor Night Shift', 'Pod-Al-Shuhada-1', 'Pod-Al-Shuhada-2', 'Urgent Team',
                       'Support Team_Morning', 'Support Team_Night','RG-Cases') 
-                       AND  "UserID" NOT IN ('GAlabdullah.c', 'MBIbrahim.c', 'RAlshammari.c', 'YAlhamad.c', 'NAlmuwallad.c', 'NAbuthunayn.c', 
-                                  'WAlqadhibi.c', 'HEltahir.c', 'SAlwehibi.c', 'AAldughyyem.c') """, engine)
+                       """, engine)
             editors["Required"] = cases_per_editor
             editorNames = editors["CasePortalName"].unique().tolist()
             sql = """SELECT * FROM grsdbrd."GeoCompletion" """
@@ -2535,7 +2536,7 @@ class AssignCasesDialog(QtWidgets.QDialog):
         try:
             with self.conn:
                 with self.conn.cursor() as cur:
-                    with self.engine_sqlserver.cursor() as cur2:
+                    with self.engine_sqlserver.connect() as conn2:
                         for idx, r in enumerate(rows):
                             row = self.df.iloc[r]
                             geoaction_widget = self.table.cellWidget(
@@ -2546,18 +2547,24 @@ class AssignCasesDialog(QtWidgets.QDialog):
                             supervisor = supervisors[idx % len(supervisors)]
 
                             # Update GeoAction
-                            cur2.execute("""UPDATE grsdbrd."GeoCompletion"
-                                SET "GeoAction" = %s
-                                WHERE "UniqueKey" = %s """, (new_geoaction, row["UniqueKey"]))
+                            conn2.execute(text("""
+                                UPDATE grsdbrd."GeoCompletion"
+                                SET "GeoAction" = :geoaction
+                                WHERE "UniqueKey" = :uniquekey
+                            """), {"geoaction": new_geoaction, "uniquekey": row["UniqueKey"]})
+                            # cur2.execute("""UPDATE grsdbrd."GeoCompletion"
+                            #     SET "GeoAction" = %s
+                            #     WHERE "UniqueKey" = %s """, (new_geoaction, row["UniqueKey"]))
 
                             # Insert Assignment
                             cur.execute("""INSERT INTO evaluation."CaseAssignment"
                                 ("UniqueKey","Case Number","REN","CompletionDate","EditorName", "EditorRecommendation", "SupervisorName","GroupID","GeoAction","Region",
-                                "AssignedSupervisor","AssignmentDate", "AssignmentType", "AssignedBy")
-                                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) """, 
+                                "AssignedSupervisor","AssignmentDate", "AssignmentType")
+                                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) """, 
+                                # , "AssignedBy")
                                 (row["UniqueKey"], row["Case Number"], row["REN"], row["GEO S Completion"], row["Geo Supervisor"],
                                 row["Geo Supervisor Recommendation"], row["SupervisorName"], row["GroupID"], new_geoaction,
-                                row["Region"], supervisor, datetime.now(), 'Manual', login_id))
+                                row["Region"], supervisor, datetime.now(), 'Manual'))
 
             QtWidgets.QMessageBox.information(self, "Success", "Cases assigned successfully!")
             self.load_comp_cases()
@@ -2625,7 +2632,7 @@ class StatisticsTab(QtWidgets.QWidget):
         # =========================
         # GEOACTION BAR CHART (PLOTLY)
         # =========================
-        layout.addWidget(QtWidgets.QLabel("Breakdown of Evaluated Cases"))
+        layout.addWidget(QtWidgets.QLabel("Breakdown of Edit Cases"))
 
         self.geo_view = QWebEngineView()
         self.geo_view.setFixedHeight(250)
@@ -2634,7 +2641,8 @@ class StatisticsTab(QtWidgets.QWidget):
         # =========================
         # SUPERVISOR PERFORMANCE (PLOTLY)
         # =========================
-        layout.addWidget(QtWidgets.QLabel("Supervisor's Performance"))
+        # if login_id in admin_users:
+        layout.addWidget(QtWidgets.QLabel("Overall Progress (Evaluated Vs Assigned)"))
 
         self.sup_view = QWebEngineView()
         self.sup_view.setMinimumHeight(250)
@@ -2670,6 +2678,8 @@ class StatisticsTab(QtWidgets.QWidget):
             fig.add_bar(
                 x=df["GeoAction"],
                 y=df["count"],
+                text=df["count"],
+                textposition='auto',
                 marker_color="#367580"
             )
         # fig.update_layout()
@@ -2691,61 +2701,61 @@ class StatisticsTab(QtWidgets.QWidget):
 
         fig = go.Figure()
         
-        if login_id in admin_users:
+        # if login_id in admin_users:
 
-            fig.add_bar(
-                x=df["AssignedSupervisor"],
-                y=df["evaluated"],
-                name="Evaluated",
-                marker_color="#367580"
-            )
+        #     fig.add_bar(
+        #         x=df["AssignedSupervisor"],
+        #         y=df["evaluated"],
+        #         name="Evaluated",
+        #         marker_color="#367580"
+        #     )
 
-            fig.add_bar(
-                x=df["AssignedSupervisor"],
-                y=df["remaining"],
-                name="Remaining",
-                marker_color="#824131"
-            )
+        #     fig.add_bar(
+        #         x=df["AssignedSupervisor"],
+        #         y=df["remaining"],
+        #         name="Remaining",
+        #         marker_color="#824131"
+        #     )
 
-            fig.update_layout(
-                barmode="stack",
-                # title="حالة التقييم حسب المشرف",
-                xaxis_title="Supervisor",
-                yaxis_title="Count",
-                font=dict(family="Cairo", size=12),
-                xaxis=dict(
-                    tickangle=-35,
-                    tickfont=dict(size=10)
-                ),
-                legend=dict(orientation="h", y=-0.25),
-                margin=dict(l=30, r=30, t=20, b=20),
-                height=300
-            )
-        else:
-            fig.add_trace(go.Scatter(
-                x=df["date"],
-                y=df["assigned"],
-                mode="lines+markers",
-                name="Assigned",
-                line=dict(color="#824131", width=2)
-            ))
+        #     fig.update_layout(
+        #         barmode="stack",
+        #         # title="حالة التقييم حسب المشرف",
+        #         xaxis_title="Supervisor",
+        #         yaxis_title="Count",
+        #         font=dict(family="Cairo", size=12),
+        #         xaxis=dict(
+        #             tickangle=-35,
+        #             tickfont=dict(size=10)
+        #         ),
+        #         legend=dict(orientation="h", y=-0.25),
+        #         margin=dict(l=30, r=30, t=20, b=20),
+        #         height=300
+        #     )
+        # else:
+        fig.add_trace(go.Scatter(
+            x=df["date"],
+            y=df["assigned"],
+            mode="lines+markers",
+            name="Assigned",
+            line=dict(color="#824131", width=2)
+        ))
 
-            fig.add_trace(go.Scatter(
-                x=df["date"],
-                y=df["evaluated"],
-                mode="lines+markers",
-                name="Evaluated",
-                line=dict(color="#367580", width=2)
-            ))
+        fig.add_trace(go.Scatter(
+            x=df["date"],
+            y=df["evaluated"].dropna(),
+            mode="lines+markers",
+            name="Evaluated",
+            line=dict(color="#367580", width=2)
+        ))
 
-            fig.update_layout(
-                xaxis_title="Date",
-                yaxis_title="Count",
-                font=dict(family="Cairo", size=12),
-                legend=dict(orientation="h", y=-0.25),
-                margin=dict(l=30, r=30, t=20, b=20),
-                height=300
-            )
+        fig.update_layout(
+            xaxis_title="Date",
+            yaxis_title="Count",
+            font=dict(family="Cairo", size=12),
+            legend=dict(orientation="h", y=-0.25),
+            margin=dict(l=30, r=30, t=20, b=20),
+            height=300
+        )
 
         html = pio.to_html(fig, include_plotlyjs='cdn', full_html=False)
         self.sup_view.setHtml(html)
@@ -2819,9 +2829,10 @@ class StatisticsTab(QtWidgets.QWidget):
             SELECT "GeoAction", COUNT(*) AS count
             FROM evaluation."CaseAssignment"
             WHERE "IsRetired" = FALSE
+            AND "GeoAction" <> 'رفض'
             {where_clause}
             GROUP BY "GeoAction"
-            ORDER BY count DESC
+            ORDER BY "GeoAction"
         '''
         geo_df = pd.read_sql(geo_sql, conn, params=params)
         # self.populate_table(self.geo_table, geo_df)
@@ -2831,44 +2842,61 @@ class StatisticsTab(QtWidgets.QWidget):
         # -------------------------
         # SUPERVISOR EVALUATION STATUS
         # -------------------------
-        if login_id in admin_users:
-            sup_sql = f'''
-                SELECT
-                    "AssignedSupervisor",
-                    SUM(CASE WHEN "IsEvaluated" THEN 1 ELSE 0 END) AS evaluated,
-                    SUM(CASE WHEN NOT "IsEvaluated" THEN 1 ELSE 0 END) AS remaining
+        # if login_id in admin_users:
+        #     sup_sql = f'''
+        #         SELECT
+        #             "AssignedSupervisor",
+        #             SUM(CASE WHEN "IsEvaluated" THEN 1 ELSE 0 END) AS evaluated,
+        #             SUM(CASE WHEN NOT "IsEvaluated" THEN 1 ELSE 0 END) AS remaining
+        #         FROM evaluation."CaseAssignment"
+        #         WHERE "IsRetired" = FALSE
+        #         {where_clause}
+        #         GROUP BY "AssignedSupervisor"
+        #         ORDER BY "AssignedSupervisor"
+        #     '''
+        
+
+        #     sup_df = pd.read_sql(sup_sql, conn, params=params)
+        # else:
+        assigned_sql = f'''
+            SELECT 
+                date,
+                SUM(assigned) OVER (ORDER BY date ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS assigned
+            FROM (
+                SELECT 
+                    DATE("AssignmentDate") AS date, 
+                    COUNT(*) AS assigned
                 FROM evaluation."CaseAssignment"
                 WHERE "IsRetired" = FALSE
                 {where_clause}
-                GROUP BY "AssignedSupervisor"
-                ORDER BY "AssignedSupervisor"
-            '''
-        
-
-            sup_df = pd.read_sql(sup_sql, conn, params=params)
-        else:
-            assigned_sql = f'''
-                SELECT DATE("AssignmentDate") AS date, COUNT(*) AS assigned FROM evaluation."CaseAssignment"
-                WHERE "IsRetired" = FALSE
-                {where_clause}
                 GROUP BY DATE("AssignmentDate")
-                ORDER BY date
-            '''
-            assigned_df = pd.read_sql(assigned_sql, conn, params=params)
+            ) sub
+            ORDER BY date
+        '''
+        assigned_df = pd.read_sql(assigned_sql, conn, params=params)
 
-            # Evaluated per day
-            evaluated_sql = f'''
-                SELECT DATE("EvaluationDate") AS date, COUNT(*) AS evaluated FROM evaluation."EvaluationTable"
+
+        # Evaluated cumulative per day
+        evaluated_sql = f'''
+            SELECT 
+                date,
+                SUM(evaluated) OVER (ORDER BY date ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS evaluated
+            FROM (
+                SELECT 
+                    DATE("EvaluationDate") AS date, 
+                    COUNT(*) AS evaluated
+                FROM evaluation."EvaluationTable"
                 WHERE "Case Number" IS NOT NULL
                 {where_clause.replace('AssignedSupervisor', 'EvaluatedBy')}
                 GROUP BY DATE("EvaluationDate")
-                ORDER BY date
-            '''
+            ) sub
+            ORDER BY date
+        '''
 
-            evaluated_df = pd.read_sql(evaluated_sql, conn, params=params)
+        evaluated_df = pd.read_sql(evaluated_sql, conn, params=params)
 
-            sup_df = pd.merge(assigned_df,evaluated_df,on="date",how="outer").fillna(0)
-            sup_df = sup_df.sort_values("date")
+        sup_df = pd.merge(assigned_df, evaluated_df, on="date", how="outer")
+        sup_df = sup_df.sort_values("date")
 
         # self.draw_supervisor_chart(sup_df)
         self.draw_supervisor_plotly(sup_df)

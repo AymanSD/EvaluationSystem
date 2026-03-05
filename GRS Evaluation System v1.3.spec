@@ -5,7 +5,7 @@ a = Analysis(
     ['GRS Evaluation System v1.3.py'],
     pathex=[],
     binaries=[],
-    datas=[('Assessment.ico', '.'), ('LogoFull.png', '.')],
+    datas=[('Assessment.ico', '.'), ('logo.png', '.')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
