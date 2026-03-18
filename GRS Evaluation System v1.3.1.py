@@ -1,12 +1,8 @@
-## Version 1.3
-# Date: 12. January 2026
+## Version 1.3.1
+# Date: 07. March 2026
 # Updates: 
-#   - Change assignment logic: use the geocompletion & current cases instead of Op Data
-#   - Limit assignment to admin: Only admins can do the assignment but users can update un-evaluated cases
-#   - Introduce Tabs: a tab for cases, and a tab for statistics
-#   - Add Manual Assignment to assign cases for specific editors manually to a supervisor (or group of supervisors)
-#   - Comment box to add additional comments
-#   - Enable Re-Evaluation of cases
+#   - Updated Handler for SQL Driver 18 error (Trust Certificate) 
+
 ################
 #### Planned
 ##  Enable sorting on table
@@ -28,8 +24,6 @@ import pyodbc
 import urllib
 import pandas as pd
 from datetime import date, datetime, timedelta
-# from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
-# from matplotlib.figure import Figure
 from PyQt5.QtWebEngineWidgets import QWebEngineView
 import plotly.graph_objects as go
 import plotly.io as pio
@@ -86,6 +80,8 @@ odbc_params = (
     f"DATABASE={DB_CONFIG['database']};"
     f"UID={DB_CONFIG['username']};"
     f"PWD={DB_CONFIG['password']};"
+    "Encrypt=yes;"
+    "TrustServerCertificate=yes;"
 )
 odbc_connect_str = urllib.parse.quote_plus(odbc_params)
 
@@ -913,9 +909,9 @@ class MainWindow(QtWidgets.QWidget):
             editors["Required"] = cases_per_editor
             editorNames = editors["CasePortalName"].unique().tolist()
             sql = """SELECT * FROM grsdbrd."GeoCompletion" """
-            completed = pd.read_sql(sql, engine_sqlserver)
-            completed = convert_to_date(completed)
-            completed = completed.sort_values(by="GEO S Completion", ascending=True)
+            geocomp = pd.read_sql(sql, engine_sqlserver)
+            geocomp = convert_to_date(geocomp)
+            geocomp = geocomp.sort_values(by="GEO S Completion", ascending=True)
             completed = completed.drop_duplicates(subset="Case Number", keep='last')
             current_cases = pd.read_sql("""SELECT "Case Number" FROM grsdbrd."CurrentCases" """, engine_sqlserver)
             evaluated_cases = pd.read_sql("""SELECT "UniqueKey" FROM evaluation."EvaluationTable" UNION 
@@ -925,7 +921,20 @@ class MainWindow(QtWidgets.QWidget):
             df_cases = df_cases[(~df_cases["Case Number"].isin(current_cases["Case Number"])) & (~df_cases["UniqueKey"].isin(evaluated_cases["UniqueKey"]))]
             df_cases = df_cases[df_cases["GeoAction"]!='No Action']
             print(f"Avaiable Cases is: {len(df_cases)}")
-            # counts = df_cases.groupby("Geo Supervisor").size().reset_index(name="Count")
+            counts = df_cases.groupby("Geo Supervisor").size().reset_index(name="Count")
+                        
+            # check missing editors
+            if len(counts) < len(editors):
+                missing_editors = set(editors["CasePortalName"]) - set(counts["Geo Supervisor"])
+                missing_df = pd.DataFrame({"Geo Supervisor": list(missing_editors), "Count": 0})
+                print(missing_editors)
+                missing_comp = completed[(~completed["Case Number"].isin(current_cases["Case Number"])) & (~completed["UniqueKey"].isin(evaluated_cases["UniqueKey"]))]
+                missing_comp = missing_comp[missing_comp["Geo Supervisor"].isin(missing_editors)]
+                print(len(missing_comp))
+                df_cases = pd.concat([df_cases, missing_comp])
+            
+
+
             selected_rows = []
 
             for _, row in editors.iterrows():
